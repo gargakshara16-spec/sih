@@ -1,144 +1,195 @@
+
 import cv2
 import numpy as np
+import torch
 from PIL import Image
 from transformers import pipeline
 
 
 # ============================================================
-# 1. LOAD THE DEPTH MODEL
+# 1. CHECK DEVICE
+# ============================================================
+
+if torch.cuda.is_available():
+    device = 0
+    print("Using NVIDIA GPU:", torch.cuda.get_device_name(0))
+else:
+    device = -1
+    print("Using CPU")
+
+
+# ============================================================
+# 2. LOAD DEPTH MODEL
 # ============================================================
 
 print("Loading Depth Anything V2...")
 
 depth_estimator = pipeline(
     task="depth-estimation",
-    model="depth-anything/Depth-Anything-V2-Small-hf"
+    model="depth-anything/Depth-Anything-V2-Small-hf",
+    device=device
 )
 
-print("Model loaded successfully!")
+print("Model loaded!")
 
 
 # ============================================================
-# 2. OPEN THE WEBCAM
+# 3. OPEN CAMERA
 # ============================================================
 
 camera = cv2.VideoCapture(0)
 
 if not camera.isOpened():
-    print("ERROR: Could not access the camera.")
+    print("Could not access camera.")
     exit()
 
-print("Camera started!")
+
+# Lower camera resolution
+camera.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+
+print("Camera started.")
 print("Press Q to quit.")
 
 
 # ============================================================
-# 3. MAIN CAMERA LOOP
+# 4. VARIABLES
+# ============================================================
+
+frame_counter = 0
+
+depth_colored = None
+
+
+# ============================================================
+# 5. CAMERA LOOP
 # ============================================================
 
 while True:
 
-    # Read one frame from the camera
     ret, frame = camera.read()
 
     if not ret:
-        print("ERROR: Could not read camera frame.")
+        print("Could not read frame.")
         break
 
 
-    # --------------------------------------------------------
-    # Convert OpenCV BGR → RGB
-    # --------------------------------------------------------
-
-    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    frame_counter += 1
 
 
     # --------------------------------------------------------
-    # Convert NumPy array → PIL Image
+    # Process every 5th frame
     # --------------------------------------------------------
 
-    image = Image.fromarray(frame_rgb)
+    if frame_counter % 5 == 0:
+
+        # Convert BGR → RGB
+        frame_rgb = cv2.cvtColor(
+            frame,
+            cv2.COLOR_BGR2RGB
+        )
+
+        # Convert NumPy → PIL
+        image = Image.fromarray(frame_rgb)
 
 
-    # --------------------------------------------------------
-    # RUN DEPTH AI
-    # --------------------------------------------------------
+        # ----------------------------------------------------
+        # Resize image BEFORE sending to AI
+        # ----------------------------------------------------
 
-    result = depth_estimator(image)
-
-    depth_image = result["depth"]
+        small_image = image.resize((320, 240))
 
 
-    # --------------------------------------------------------
-    # Convert depth map to NumPy
-    # --------------------------------------------------------
+        # ----------------------------------------------------
+        # Depth estimation
+        # ----------------------------------------------------
 
-    depth = np.array(depth_image)
+        result = depth_estimator(small_image)
 
-
-    # --------------------------------------------------------
-    # Normalize depth values for visualization
-    # --------------------------------------------------------
-
-    depth_normalized = cv2.normalize(
-        depth,
-        None,
-        0,
-        255,
-        cv2.NORM_MINMAX
-    )
-
-    depth_normalized = depth_normalized.astype(np.uint8)
+        depth_image = result["depth"]
 
 
-    # --------------------------------------------------------
-    # Apply a color map
-    # --------------------------------------------------------
+        # ----------------------------------------------------
+        # Convert depth to NumPy
+        # ----------------------------------------------------
 
-    depth_colored = cv2.applyColorMap(
-        depth_normalized,
-        cv2.COLORMAP_PLASMA
-    )
+        depth = np.array(depth_image)
 
 
-    # --------------------------------------------------------
-    # Resize depth map to camera size
-    # --------------------------------------------------------
+        # ----------------------------------------------------
+        # Normalize
+        # ----------------------------------------------------
 
-    depth_colored = cv2.resize(
-        depth_colored,
-        (frame.shape[1], frame.shape[0])
-    )
+        depth_normalized = cv2.normalize(
+            depth,
+            None,
+            0,
+            255,
+            cv2.NORM_MINMAX
+        )
+
+        depth_normalized = depth_normalized.astype(
+            np.uint8
+        )
+
+
+        # ----------------------------------------------------
+        # Colorize
+        # ----------------------------------------------------
+
+        depth_colored = cv2.applyColorMap(
+            depth_normalized,
+            cv2.COLORMAP_PLASMA
+        )
+
+
+        # ----------------------------------------------------
+        # Resize depth to camera display size
+        # ----------------------------------------------------
+
+        depth_colored = cv2.resize(
+            depth_colored,
+            (640, 480)
+        )
 
 
     # ========================================================
-    # 4. DISPLAY CAMERA + DEPTH
+    # 6. DISPLAY
     # ========================================================
 
-    combined = np.hstack((frame, depth_colored))
+    if depth_colored is not None:
 
+        combined = np.hstack(
+            (frame, depth_colored)
+        )
 
-    cv2.imshow(
-        "Depth Wizard - Live Depth",
-        combined
-    )
+        cv2.imshow(
+            "Depth Wizard",
+            combined
+        )
+
+    else:
+
+        cv2.imshow(
+            "Depth Wizard",
+            frame
+        )
 
 
     # ========================================================
-    # 5. QUIT
+    # 7. QUIT
     # ========================================================
 
-    key = cv2.waitKey(1) & 0xFF
-
-    if key == ord("q"):
+    if cv2.waitKey(1) & 0xFF == ord("q"):
         break
 
 
 # ============================================================
-# 6. CLEANUP
+# 8. CLEANUP
 # ============================================================
 
 camera.release()
 cv2.destroyAllWindows()
 
-print("Depth Wizard stopped.") 
+print("Depth Wizard stopped.")
+
